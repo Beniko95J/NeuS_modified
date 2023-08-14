@@ -152,5 +152,6 @@ fabric.properties
 
 data
 public_data
+data_dir
 exp
 tmp
