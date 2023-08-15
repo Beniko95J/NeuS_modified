@@ -13,6 +13,7 @@ from icecream import ic
 from tqdm import tqdm
 from pyhocon import ConfigFactory
 from models.dataset import Dataset
+from models.dataset_dtu import DatasetDTU
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
 
@@ -32,6 +33,9 @@ class Runner:
         self.conf['dataset.data_dir'] = self.conf['dataset.data_dir'].replace('CASE_NAME', case)
         self.base_exp_dir = self.conf['general.base_exp_dir']
         os.makedirs(self.base_exp_dir, exist_ok=True)
+        if 'dtu' in case:
+            Dataset = DatasetDTU
+
         self.dataset = Dataset(self.conf['dataset'])
         self.iter_step = 0
 

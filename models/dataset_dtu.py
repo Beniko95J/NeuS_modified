@@ -3,11 +3,8 @@ import torch.nn.functional as F
 import cv2 as cv
 import numpy as np
 import os
-import json
-import trimesh
-import cv2 as cv
 from glob import glob
-from copy import deepcopy
+from icecream import ic
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
 
@@ -37,9 +34,9 @@ def load_K_Rt_from_P(filename, P=None):
     return intrinsics, pose
 
 
-class Dataset:
+class DatasetDTU:
     def __init__(self, conf):
-        super(Dataset, self).__init__()
+        super(DatasetDTU, self).__init__()
         print('Load data: Begin')
         self.device = torch.device('cuda')
         self.conf = conf
@@ -50,79 +47,50 @@ class Dataset:
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
-        
-        with open(os.path.join(self.data_dir, 'transforms_test.json'), 'r') as fp:
-            data_info = json.load(fp)
 
-        self.images_lis = []
-        self.normal_lis = []
-        
-        pose_all = []
-  
-        for frame in data_info['frames']:
-            img_path = os.path.join(self.data_dir, frame['file_path'][2:] + '.png')
-            normal_path = os.path.join(self.data_dir, frame['file_path'][2:] + '_normal' + '.png')
-            pose_all.append(torch.from_numpy(np.array(frame['transform_matrix'], dtype=np.float32)))
-            self.images_lis.append(img_path)
-            self.normal_lis.append(normal_path)
-
-        pose_all = torch.stack(pose_all).cuda()
-
-        # Scale_mat: transform the object to unit sphere for training
-        pcd = trimesh.load(os.path.join(self.data_dir, 'points_of_interest.ply'))
-        vertices = pcd.vertices
-        bbox_max = np.max(vertices, axis=0) 
-        bbox_min = np.min(vertices, axis=0) 
-        center = (bbox_max + bbox_min) * 0.5
-        radius = np.linalg.norm(vertices - center, ord=2, axis=-1).max() 
-        scale_mat = np.diag([radius, radius, radius, 1.0]).astype(np.float32)
-        scale_mat[:3, 3] = center
-
-        # Scale_mat: transform the reconstructed mesh in unit sphere to original space with scale 150 for evaluation
-        self.scale_mat = deepcopy(scale_mat)
-        self.scale_mat[0, 0] *= 150
-        self.scale_mat[1, 1] *= 150
-        self.scale_mat[2, 2] *= 150
-        self.scale_mat[:3, 3] *= 150
-
-        for i in range(pose_all.shape[0]):
-            pose_all[i, :, 3:] = torch.from_numpy(np.linalg.inv(scale_mat)).cuda() @ pose_all[i, :, 3:]
-        
-        # from opencv to opengl
-        self.pose_all = torch.matmul(pose_all, torch.diag(torch.tensor([1., -1., -1., 1.])))
-        
+        camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
+        self.camera_dict = camera_dict
+        self.images_lis = sorted(glob(os.path.join(self.data_dir, 'image/*.png')))
         self.n_images = len(self.images_lis)
         self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
-        self.normal_np = np.stack([cv.imread(im_name) for im_name in self.normal_lis]) 
-        self.H, self.W, _ = self.images_np[0].shape
-        
-        # intrinsic
-        camera_angle_x = float(data_info['camera_angle_x'])
-        self.focal = .5 * self.W / np.tan(.5 * camera_angle_x)
+        self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
+        self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
+
+        # world_mat is a projection matrix from world to image
+        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+
+        self.scale_mats_np = []
+
+        # scale_mat: used for coordinate normalization, we assume the scene to render is inside a unit sphere at origin.
+        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+
         self.intrinsics_all = []
-        intrinsics = torch.Tensor([
-            [self.focal, 0, self.W / 2, 0],
-            [0, self.focal, self.H / 2, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]]).float()
-        for i in range(self.images_np.shape[0]):
-            self.intrinsics_all.append(intrinsics)
-            
-        self.masks_np = np.ones_like(self.images_np) * 255. / 256.
-        self.images = torch.from_numpy(self.images_np.astype(np.float32)).cuda()  # [n_images, H, W, 3]
-        self.masks  = torch.from_numpy(self.masks_np.astype(np.float32)).cuda()  # [n_images, H, W, 3]
+        self.pose_all = []
+
+        for scale_mat, world_mat in zip(self.scale_mats_np, self.world_mats_np):
+            P = world_mat @ scale_mat
+            P = P[:3, :4]
+            intrinsics, pose = load_K_Rt_from_P(None, P)
+            self.intrinsics_all.append(torch.from_numpy(intrinsics).float())
+            self.pose_all.append(torch.from_numpy(pose).float())
+
+        self.images = torch.from_numpy(self.images_np.astype(np.float32)).cpu()  # [n_images, H, W, 3]
+        self.masks  = torch.from_numpy(self.masks_np.astype(np.float32)).cpu()   # [n_images, H, W, 3]
         self.intrinsics_all = torch.stack(self.intrinsics_all).to(self.device)   # [n_images, 4, 4]
         self.intrinsics_all_inv = torch.inverse(self.intrinsics_all)  # [n_images, 4, 4]
         self.focal = self.intrinsics_all[0][0, 0]
-        self.inv_pose_all = torch.inverse(self.pose_all)
+        self.pose_all = torch.stack(self.pose_all).to(self.device)  # [n_images, 4, 4]
         self.H, self.W = self.images.shape[1], self.images.shape[2]
         self.image_pixels = self.H * self.W
-        self.all_rays_o = self.pose_all[:,:3,3]
 
         object_bbox_min = np.array([-1.01, -1.01, -1.01, 1.0])
         object_bbox_max = np.array([ 1.01,  1.01,  1.01, 1.0])
-        self.object_bbox_min = object_bbox_min[:3]
-        self.object_bbox_max = object_bbox_max[:3]
+        # Object scale mat: region of interest to **extract mesh**
+        object_scale_mat = np.load(os.path.join(self.data_dir, self.object_cameras_name))['scale_mat_0']
+        object_bbox_min = np.linalg.inv(self.scale_mats_np[0]) @ object_scale_mat @ object_bbox_min[:, None]
+        object_bbox_max = np.linalg.inv(self.scale_mats_np[0]) @ object_scale_mat @ object_bbox_max[:, None]
+        self.object_bbox_min = object_bbox_min[:3, 0]
+        self.object_bbox_max = object_bbox_max[:3, 0]
 
         print('Load data: End')
 
@@ -155,7 +123,7 @@ class Dataset:
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)    # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape) # batch_size, 3
-        return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1).cuda()    # batch_size, 10
+        return torch.cat([rays_o.cpu(), rays_v.cpu(), color, mask[:, :1]], dim=-1).cuda()    # batch_size, 10
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
         """
