@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from models.embedder import get_embedder
+import models.ref_utils as ref_utils
 
 
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
@@ -18,7 +19,10 @@ class SDFNetwork(nn.Module):
                  scale=1,
                  geometric_init=True,
                  weight_norm=True,
-                 inside_outside=False):
+                 inside_outside=False,
+                 enable_pred_roughness=False,
+                 roughness_activation=torch.nn.functional.softplus,
+                 roughness_bias=-1):
         super(SDFNetwork, self).__init__()
 
         dims = [d_in] + [d_hidden for _ in range(n_layers)] + [d_out]
@@ -69,7 +73,15 @@ class SDFNetwork(nn.Module):
 
         self.activation = nn.Softplus(beta=100)
 
+        self.enable_pred_roughness = enable_pred_roughness
+        self.roughness_activation = roughness_activation
+        self.roughness_bias = roughness_bias
+        # roughness layer
+        if self.enable_pred_roughness:
+            self.raw_roughness = nn.Linear(d_hidden, 1)
+
     def forward(self, inputs):
+        roughness = 0
         inputs = inputs * self.scale
         if self.embed_fn_fine is not None:
             inputs = self.embed_fn_fine(inputs)
@@ -81,17 +93,22 @@ class SDFNetwork(nn.Module):
             if l in self.skip_in:
                 x = torch.cat([x, inputs], 1) / np.sqrt(2)
 
+            if l == self.num_layers - 2:
+                if self.enable_pred_roughness:
+                    roughness = self.roughness_activation(self.raw_roughness(x) + self.roughness_bias)
+
             x = lin(x)
 
             if l < self.num_layers - 2:
                 x = self.activation(x)
-        return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
+
+        return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1), roughness
 
     def sdf(self, x):
-        return self.forward(x)[:, :1]
+        return self.forward(x)[0][:, :1]
 
     def sdf_hidden_appearance(self, x):
-        return self.forward(x)
+        return self.forward(x)[0]
 
     def gradient(self, x):
         x.requires_grad_(True)
@@ -118,18 +135,28 @@ class RenderingNetwork(nn.Module):
                  n_layers,
                  weight_norm=True,
                  multires_view=0,
-                 squeeze_out=True):
+                 squeeze_out=True,
+                 use_directional_enc=False,
+                 deg_view=4):
         super().__init__()
 
         self.mode = mode
         self.squeeze_out = squeeze_out
+        self.use_directional_enc = use_directional_enc
+        self.deg_view = deg_view
         dims = [d_in + d_feature] + [d_hidden for _ in range(n_layers)] + [d_out]
 
         self.embedview_fn = None
+        self.dir_enc_fn = None
         if multires_view > 0:
-            embedview_fn, input_ch = get_embedder(multires_view)
-            self.embedview_fn = embedview_fn
-            dims[0] += (input_ch - 3)
+            if self.use_directional_enc:
+                self.dir_enc_fn = ref_utils.generate_ide_fn(self.deg_view)
+                input_ch = 38  # FIXME: magic number when deg_view=4
+                dims[0] += (input_ch - 3)
+            else:
+                embedview_fn, input_ch = get_embedder(multires_view)
+                self.embedview_fn = embedview_fn
+                dims[0] += (input_ch - 3)
 
         self.num_layers = len(dims)
 
@@ -144,9 +171,12 @@ class RenderingNetwork(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, points, normals, view_dirs, feature_vectors):
+    def forward(self, points, normals, view_dirs, feature_vectors, roughness=0):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
+
+        if self.dir_enc_fn is not None:
+            view_dirs = self.dir_enc_fn(view_dirs, roughness)
 
         rendering_input = None
 
