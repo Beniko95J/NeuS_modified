@@ -222,7 +222,11 @@ class NeuSRenderer:
         feature_vector = sdf_nn_output[:, 1:]
 
         gradients = sdf_network.gradient(pts).squeeze()
-        sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        normals = F.normalize(gradients, dim=-1)
+        reflection_dirs = 2 * (-dirs * normals).sum(dim=-1, keepdim=True) * normals + dirs
+
+        # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        sampled_color = color_network(pts, gradients, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
