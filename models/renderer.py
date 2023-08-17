@@ -270,6 +270,10 @@ class NeuSRenderer:
                                             dim=-1) - 1.0) ** 2
         gradient_error = (relax_inside_sphere * gradient_error).sum() / (relax_inside_sphere.sum() + 1e-5)
 
+        # Normal map
+        normals_map = F.normalize(gradients.reshape(batch_size, n_samples, 3), dim=-1)
+        normals_map = (normals_map * weights[:, :128, None]).sum(dim=-2).detach().cpu().numpy()
+
         return {
             'color': color,
             'sdf': sdf,
@@ -280,7 +284,8 @@ class NeuSRenderer:
             'weights': weights,
             'cdf': c.reshape(batch_size, n_samples),
             'gradient_error': gradient_error,
-            'inside_sphere': inside_sphere
+            'inside_sphere': inside_sphere,
+            'normal_map': normals_map,
         }
 
     def render(self, rays_o, rays_d, near, far, perturb_overwrite=-1, background_rgb=None, cos_anneal_ratio=0.0):
@@ -374,7 +379,8 @@ class NeuSRenderer:
             'gradients': gradients,
             'weights': weights,
             'gradient_error': ret_fine['gradient_error'],
-            'inside_sphere': ret_fine['inside_sphere']
+            'inside_sphere': ret_fine['inside_sphere'],
+            'normal_map': ret_fine['normal_map']
         }
 
     def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
