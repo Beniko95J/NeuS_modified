@@ -202,7 +202,8 @@ class NeuSRenderer:
                     background_alpha=None,
                     background_sampled_color=None,
                     background_rgb=None,
-                    cos_anneal_ratio=0.0):
+                    cos_anneal_ratio=0.0,
+                    intrinsics=None, intrinsics_inv=None, poses=None, images=None):
         batch_size, n_samples = z_vals.shape
 
         # Section length
@@ -224,6 +225,47 @@ class NeuSRenderer:
         gradients = sdf_network.gradient(pts).squeeze()
         normals = F.normalize(gradients, dim=-1)
         reflection_dirs = 2 * (-dirs * normals).sum(dim=-1, keepdim=True) * normals + dirs
+
+        pts_norm = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True).reshape(batch_size, n_samples)
+        inside_sphere = (pts_norm < 1.0).float().detach()
+        relax_inside_sphere = (pts_norm < 1.2).float().detach()
+
+        # Geo-NeuS
+        if intrinsics is not None:
+            sdf_d = sdf.reshape(batch_size, n_samples)
+            prev_sdf, next_sdf = sdf_d[:, :-1], sdf_d[:, 1:]
+            sign = prev_sdf * next_sdf
+            sign = torch.where(sign <= 0, torch.ones_like(sign), torch.zeros_like(sign))
+            idx = reversed(torch.Tensor(range(1, n_samples)).cuda())
+            tmp = torch.einsum("ab,b->ab", (sign, idx))
+            prev_idx = torch.argmax(tmp, 1, keepdim=True)
+            next_idx = prev_idx + 1
+
+            prev_inside_sphere = torch.gather(inside_sphere, 1, prev_idx)  # (512, 1)
+            next_inside_sphere = torch.gather(inside_sphere, 1, next_idx)  # (512, 1)
+            mid_inside_sphere = (0.5 * (prev_inside_sphere + next_inside_sphere) > 0.5).float()  # prev and next both inside sphere
+            sdf1 = torch.gather(sdf_d, 1, prev_idx)  # (512, 1), for interpolation weight
+            sdf2 = torch.gather(sdf_d, 1, next_idx)  # (512, 1), for interpolation weight
+            z_vals1 = torch.gather(mid_z_vals, 1, prev_idx)  # (512, 1), for interpolation value
+            z_vals2 = torch.gather(mid_z_vals, 1, next_idx)  # (512, 1), for interpolation value
+            z_vals_sdf0 = (sdf1 * z_vals2 - sdf2 * z_vals1) / (sdf1 - sdf2 + 1e-10)  # (512, 1)
+            z_vals_sdf0 = torch.where(z_vals_sdf0 < 0, torch.zeros_like(z_vals_sdf0), z_vals_sdf0)  # > 0
+            max_z_val = torch.max(z_vals)
+            z_vals_sdf0 = torch.where(z_vals_sdf0 > max_z_val, torch.zeros_like(z_vals_sdf0), z_vals_sdf0)
+
+            pts_sdf0 = rays_o[:, None, :] + rays_d[:, None, :] * z_vals_sdf0[..., :, None]  # (B, 1, 3)
+            gradients_sdf0 = sdf_network.gradient(pts_sdf0.reshape(-1, 3)).squeeze().reshape(batch_size, 1, 3)
+            gradients_sdf0 = gradients_sdf0 / torch.linalg.norm(gradients_sdf0, ord=2, dim=-1, keepdim=True)
+            normal_sdf = (gradients_sdf0.squeeze() * mid_inside_sphere).detach().cpu().numpy()  # [batch_size, 3]
+            gradients_sdf0 = torch.matmul(poses[0, :3, :3].permute(1, 0)[None, ...], gradients_sdf0.permute(0, 2, 1)).permute(0, 2, 1).detach()
+
+            project_xyz = torch.matmul(poses[0, :3, :3].permute(1, 0), pts_sdf0.permute(0, 2, 1))
+            t = - torch.matmul(poses[0, :3, :3].permute(1, 0), poses[0, :3, 3, None])
+            project_xyz = project_xyz + t  # xyz in the camera cooridnate
+            pts_sdf0_ref = project_xyz
+            project_xyz = torch.matmul(intrinsics[0, :3, :3], project_xyz)  # [batch_size, 3, 1]
+            depth_sdf = (project_xyz[:, 2, 0] * mid_inside_sphere.squeeze(1)).detach().cpu().numpy()  # [batch_size, ]
+            disp_sdf0 = torch.matmul(gradients_sdf0, pts_sdf0_ref)  # what does this mean in Geo-NeuS?
 
         # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
         sampled_color = color_network(pts, gradients, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
@@ -249,10 +291,6 @@ class NeuSRenderer:
         c = prev_cdf
 
         alpha = ((p + 1e-5) / (c + 1e-5)).reshape(batch_size, n_samples).clip(0.0, 1.0)
-
-        pts_norm = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True).reshape(batch_size, n_samples)
-        inside_sphere = (pts_norm < 1.0).float().detach()
-        relax_inside_sphere = (pts_norm < 1.2).float().detach()
 
         # Render with background
         if background_alpha is not None:
@@ -290,9 +328,11 @@ class NeuSRenderer:
             'gradient_error': gradient_error,
             'inside_sphere': inside_sphere,
             'normal_map': normals_map,
+            'depth_sdf': depth_sdf,
+            'normal_sdf': normal_sdf
         }
 
-    def render(self, rays_o, rays_d, near, far, perturb_overwrite=-1, background_rgb=None, cos_anneal_ratio=0.0):
+    def render(self, rays_o, rays_d, near, far, perturb_overwrite=-1, background_rgb=None, cos_anneal_ratio=0.0, intrinsics=None, intrinsics_inv=None, poses=None, images=None):
         batch_size = len(rays_o)
         sample_dist = 2.0 / self.n_samples   # Assuming the region of interest is a unit sphere
         z_vals = torch.linspace(0.0, 1.0, self.n_samples)
@@ -312,14 +352,14 @@ class NeuSRenderer:
             z_vals = z_vals + t_rand * 2.0 / self.n_samples
 
             if self.n_outside > 0:
-                mids = .5 * (z_vals_outside[..., 1:] + z_vals_outside[..., :-1])
-                upper = torch.cat([mids, z_vals_outside[..., -1:]], -1)
+                mids = .5 * (z_vals_outside[..., 1:] + z_vals_outside[..., :-1])  # [31]
+                upper = torch.cat([mids, z_vals_outside[..., -1:]], -1)  # [32]
                 lower = torch.cat([z_vals_outside[..., :1], mids], -1)
                 t_rand = torch.rand([batch_size, z_vals_outside.shape[-1]])
                 z_vals_outside = lower[None, :] + (upper - lower)[None, :] * t_rand
 
         if self.n_outside > 0:
-            z_vals_outside = far / torch.flip(z_vals_outside, dims=[-1]) + 1.0 / self.n_samples
+            z_vals_outside = far / torch.flip(z_vals_outside, dims=[-1]) + 1.0 / self.n_samples  # > 1.0, [512, 32]
 
         background_alpha = None
         background_sampled_color = None
@@ -327,8 +367,8 @@ class NeuSRenderer:
         # Up sample
         if self.n_importance > 0:
             with torch.no_grad():
-                pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
-                sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)
+                pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # [512, 64, 3]
+                sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)  # [512, 64]
 
                 for i in range(self.up_sample_steps):
                     new_z_vals = self.up_sample(rays_o,
@@ -336,7 +376,7 @@ class NeuSRenderer:
                                                 z_vals,
                                                 sdf,
                                                 self.n_importance // self.up_sample_steps,
-                                                64 * 2**i)
+                                                64 * 2**i)  # [512, 16]
                     z_vals, sdf = self.cat_z_vals(rays_o,
                                                   rays_d,
                                                   z_vals,
@@ -366,7 +406,8 @@ class NeuSRenderer:
                                     background_rgb=background_rgb,
                                     background_alpha=background_alpha,
                                     background_sampled_color=background_sampled_color,
-                                    cos_anneal_ratio=cos_anneal_ratio)
+                                    cos_anneal_ratio=cos_anneal_ratio,
+                                    intrinsics=intrinsics, intrinsics_inv=intrinsics_inv, poses=poses, images=images)
 
         color_fine = ret_fine['color']
         weights = ret_fine['weights']
@@ -384,7 +425,9 @@ class NeuSRenderer:
             'weights': weights,
             'gradient_error': ret_fine['gradient_error'],
             'inside_sphere': ret_fine['inside_sphere'],
-            'normal_map': ret_fine['normal_map']
+            'normal_map': ret_fine['normal_map'],
+            'depth_sdf': ret_fine['depth_sdf'],
+            'normal_sdf': ret_fine['normal_sdf']
         }
 
     def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):

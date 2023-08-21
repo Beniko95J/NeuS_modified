@@ -122,7 +122,7 @@ class Runner:
         image_perm = self.get_image_perm()
 
         for iter_i in tqdm(range(res_step)):
-            data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
+            data, intrinsic, intrinsic_inv, pose = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
             near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
@@ -139,7 +139,10 @@ class Runner:
             mask_sum = mask.sum() + 1e-5
             render_out = self.renderer.render(rays_o, rays_d, near, far,
                                               background_rgb=background_rgb,
-                                              cos_anneal_ratio=self.get_cos_anneal_ratio())
+                                              cos_anneal_ratio=self.get_cos_anneal_ratio(),
+                                              intrinsics=intrinsic,
+                                              intrinsics_inv=intrinsic_inv,
+                                              poses=pose)
 
             color_fine = render_out['color_fine']
             s_val = render_out['s_val']
@@ -269,7 +272,7 @@ class Runner:
 
         if resolution_level < 0:
             resolution_level = self.validate_resolution_level
-        rays_o, rays_d, _ = self.dataset.gen_rays_at(idx, resolution_level=resolution_level)
+        rays_o, rays_d, _, intrinsic, intrinsic_inv, pose = self.dataset.gen_rays_at(idx, resolution_level=resolution_level)
         H, W, _ = rays_o.shape
         rays_o = rays_o.reshape(-1, 3).split(self.batch_size)
         rays_d = rays_d.reshape(-1, 3).split(self.batch_size)
@@ -286,7 +289,10 @@ class Runner:
                                               near,
                                               far,
                                               cos_anneal_ratio=self.get_cos_anneal_ratio(),
-                                              background_rgb=background_rgb)
+                                              background_rgb=background_rgb,
+                                              intrinsics=intrinsic,
+                                              intrinsics_inv=intrinsic_inv,
+                                              poses=pose)
 
             def feasible(key): return (key in render_out) and (render_out[key] is not None)
 
@@ -336,8 +342,8 @@ class Runner:
 
         if resolution_level < 0:
             resolution_level = self.validate_resolution_level
-        if pose is None:
-            rays_o, rays_d, uv = self.dataset.gen_rays_at(idx, resolution_level=resolution_level)
+        if pose is None:  # FIXME
+            rays_o, rays_d, uv, intrinsic, intrinsic_inv, pose = self.dataset.gen_rays_at(idx, resolution_level=resolution_level)
         else:
             rays_o, rays_d, uv = self.dataset.gen_rays_visu(idx, pose, resolution_level=resolution_level)
         H, W, _ = rays_o.shape
@@ -347,6 +353,8 @@ class Runner:
         
         out_rgb_fine = []
         out_normal_fine = []
+        out_depth_sdf = []
+        out_normal_sdf = []
 
         for rays_o_batch, rays_d_batch, uv_batch in zip(rays_o, rays_d, uv):
             near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
@@ -357,7 +365,10 @@ class Runner:
                                               near,
                                               far,
                                               cos_anneal_ratio=self.get_cos_anneal_ratio(),
-                                              background_rgb=background_rgb)
+                                              background_rgb=background_rgb,
+                                              intrinsics=intrinsic,
+                                              intrinsics_inv=intrinsic_inv,
+                                              poses=pose)
 
             def feasible(key): return (key in render_out) and (render_out[key] is not None)
 
@@ -366,17 +377,35 @@ class Runner:
             if feasible('gradients') and feasible('weights'):
                 normals = render_out['normal_map']
                 out_normal_fine.append(normals)
+            if feasible('depth_sdf') and feasible('normal_sdf'):
+                out_depth_sdf.append(render_out['depth_sdf'])
+                out_normal_sdf.append(render_out['normal_sdf'])
             del render_out
             
         normal_img = None
+        depth_sdf_img = None
+        normal_sdf_img = None
         if len(out_normal_fine) > 0:
             normal_img =  torch.from_numpy(np.concatenate(out_normal_fine, axis=0)) / 2. + 0.5
             normal_img = normal_img.permute(1, 0).reshape([3, H, W]) 
+        if len(out_depth_sdf) > 0:
+            depth_sdf_img = torch.from_numpy(np.concatenate(out_depth_sdf, axis=0))
+            depth_sdf_img = depth_sdf_img.reshape([H, W])
+            depth_sdf_img = depth_sdf_img / depth_sdf_img.max()
+            normal_sdf_img = torch.from_numpy(np.concatenate(out_normal_sdf, axis=0)) / 2. + 0.5
+            normal_sdf_img = normal_sdf_img.permute(1, 0).reshape([3, H, W])
         
         vis_validation_dir = os.path.join(self.base_exp_dir, 'vis_validation')
         os.makedirs(os.path.join(vis_validation_dir, 'normals_all'), exist_ok=True)
         os.makedirs(os.path.join(vis_validation_dir, 'test_images_all'), exist_ok=True)
         os.makedirs(os.path.join(vis_validation_dir, 'normals'), exist_ok=True)
+
+        if depth_sdf_img is not None:
+            os.makedirs(os.path.join(vis_validation_dir, 'depth_sdf'), exist_ok=True)
+            os.makedirs(os.path.join(vis_validation_dir, 'normal_sdf'), exist_ok=True)
+            torchvision.utils.save_image(depth_sdf_img.clone(), os.path.join(vis_validation_dir, 'depth_sdf', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
+            torchvision.utils.save_image(normal_sdf_img.clone(), os.path.join(vis_validation_dir, 'normal_sdf', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
+
         torchvision.utils.save_image(normal_img.clone(), os.path.join(vis_validation_dir, 'normals', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
         img_fine = None
         if len(out_rgb_fine) > 0:
@@ -488,13 +517,13 @@ class Runner:
                 nonvalid_bbox = text_info['nonvalid_bbox']
             except:
                 nonvalid_bbox = None
-            mean_d2s, mean_s2d, over_all = evaluation_shinyblender(mesh_eval, os.path.join(self.conf['dataset'].data_dir, 'dense_pcd.ply'),self.base_exp_dir, 
-                                                                   max_dist_d=max_dist_d, max_dist_t=max_dist_t, points_for_plane=points_for_plane, nonvalid_bbox=nonvalid_bbox )
+            # mean_d2s, mean_s2d, over_all = evaluation_shinyblender(mesh_eval, os.path.join(self.conf['dataset'].data_dir, 'dense_pcd.ply'),self.base_exp_dir, 
+            #                                                        max_dist_d=max_dist_d, max_dist_t=max_dist_t, points_for_plane=points_for_plane, nonvalid_bbox=nonvalid_bbox )
 
-            result.write(f'{self.iter_step}: ')
-            result.write(f'{mean_d2s} {mean_s2d} {over_all}')
-            result.write('\n') 
-            result.flush()
+            # result.write(f'{self.iter_step}: ')
+            # result.write(f'{mean_d2s} {mean_s2d} {over_all}')
+            # result.write('\n') 
+            # result.flush()
             if self.iter_step == self.end_iter - 1 or ckpt_path is not None and validate_normal:
                 self.validate_all_normals()
 

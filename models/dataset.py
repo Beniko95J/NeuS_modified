@@ -130,6 +130,13 @@ class Dataset:
         """
         Generate rays at world space from one camera.
         """
+
+        idx_list = [[img_idx]]
+
+        poses_pair = self.pose_all[idx_list]  # C -> W
+        intrinsics_pair = self.intrinsics_all[idx_list]
+        intrinsics_inv_pair = self.intrinsics_all_inv[idx_list]
+
         l = resolution_level
         tx = torch.linspace(0, self.W - 1, self.W // l)
         ty = torch.linspace(0, self.H - 1, self.H // l)
@@ -139,12 +146,19 @@ class Dataset:
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # W, H, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, None, :3, :3], rays_v[:, :, :, None]).squeeze()  # W, H, 3
         rays_o = self.pose_all[img_idx, None, None, :3, 3].expand(rays_v.shape)  # W, H, 3
-        return rays_o.transpose(0, 1), rays_v.transpose(0, 1), torch.stack([pixels_y, pixels_x], dim=-1).transpose(0, 1)
+        return rays_o.transpose(0, 1), rays_v.transpose(0, 1), torch.stack([pixels_y, pixels_x], dim=-1).transpose(0, 1), intrinsics_pair, intrinsics_inv_pair, poses_pair
 
     def gen_random_rays_at(self, img_idx, batch_size):
         """
         Generate random rays at world space from one camera.
         """
+
+        idx_list = [[img_idx]]
+
+        poses_pair = self.pose_all[idx_list]  # C -> W
+        intrinsics_pair = self.intrinsics_all[idx_list]
+        intrinsics_inv_pair = self.intrinsics_all_inv[idx_list]
+
         pixels_x = torch.randint(low=0, high=self.W, size=[batch_size]).to(device=self.images[img_idx].device)
         pixels_y = torch.randint(low=0, high=self.H, size=[batch_size]).to(device=self.images[img_idx].device)
         color = self.images[img_idx][(pixels_y, pixels_x)]    # batch_size, 3
@@ -155,7 +169,7 @@ class Dataset:
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)    # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape) # batch_size, 3
-        return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1).cuda()    # batch_size, 10
+        return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1).cuda(), intrinsics_pair, intrinsics_inv_pair, poses_pair    # batch_size, 10
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
         """
