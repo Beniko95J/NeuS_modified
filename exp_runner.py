@@ -148,6 +148,7 @@ class Runner:
             s_val = render_out['s_val']
             cdf_fine = render_out['cdf_fine']
             gradient_error = render_out['gradient_error']
+            gradient_ref_error = render_out['gradient_ref_error']
             weight_max = render_out['weight_max']
             weight_sum = render_out['weight_sum']
 
@@ -157,6 +158,8 @@ class Runner:
             psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb)**2 * mask).sum() / (mask_sum * 3.0)).sqrt())
 
             eikonal_loss = gradient_error
+            if gradient_ref_error is not None:
+                eikonal_loss += gradient_ref_error
 
             mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-3, 1.0 - 1e-3), mask)
 
