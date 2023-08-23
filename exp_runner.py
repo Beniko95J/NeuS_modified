@@ -358,6 +358,7 @@ class Runner:
         out_normal_fine = []
         out_depth_sdf = []
         out_normal_sdf = []
+        out_radiance_weight = []
 
         for rays_o_batch, rays_d_batch, uv_batch in zip(rays_o, rays_d, uv):
             near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
@@ -383,6 +384,8 @@ class Runner:
             if feasible('depth_sdf') and feasible('normal_sdf'):
                 out_depth_sdf.append(render_out['depth_sdf'])
                 out_normal_sdf.append(render_out['normal_sdf'])
+            if feasible('radiance_weight_ray'):
+                out_radiance_weight.append(render_out['radiance_weight_ray'])
             del render_out
             
         normal_img = None

@@ -18,7 +18,8 @@ class SDFNetwork(nn.Module):
                  scale=1,
                  geometric_init=True,
                  weight_norm=True,
-                 inside_outside=False):
+                 inside_outside=False,
+                 radiance_weight_bias=-6):
         super(SDFNetwork, self).__init__()
 
         dims = [d_in] + [d_hidden for _ in range(n_layers)] + [d_out]
@@ -33,6 +34,7 @@ class SDFNetwork(nn.Module):
         self.num_layers = len(dims)
         self.skip_in = skip_in
         self.scale = scale
+        self.radiance_weight_bias = radiance_weight_bias
 
         for l in range(0, self.num_layers - 1):
             if l + 1 in self.skip_in:
@@ -67,7 +69,11 @@ class SDFNetwork(nn.Module):
 
             setattr(self, "lin" + str(l), lin)
 
+        lin_radiance_weight = nn.Linear(d_hidden, 1)
+        setattr(self, 'lin_radiance_weight', lin_radiance_weight)
+
         self.activation = nn.Softplus(beta=100)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, inputs):
         inputs = inputs * self.scale
@@ -81,11 +87,16 @@ class SDFNetwork(nn.Module):
             if l in self.skip_in:
                 x = torch.cat([x, inputs], 1) / np.sqrt(2)
 
+            if l == self.num_layers - 2:
+                lin_radiance_weight = getattr(self, 'lin_radiance_weight')
+                radiance_weight = self.sigmoid(lin_radiance_weight(x) + self.radiance_weight_bias)
+
             x = lin(x)
 
             if l < self.num_layers - 2:
                 x = self.activation(x)
-        return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
+
+        return torch.cat([x[:, :1] / self.scale, radiance_weight, x[:, 1:]], dim=-1)
 
     def sdf(self, x):
         return self.forward(x)[:, :1]

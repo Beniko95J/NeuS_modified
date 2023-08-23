@@ -222,7 +222,9 @@ class NeuSRenderer:
 
         sdf_nn_output = sdf_network(pts)
         sdf = sdf_nn_output[:, :1]
-        feature_vector = sdf_nn_output[:, 1:]
+        radiance_weight = sdf_nn_output[:, 1:2]
+        radiance_weight = radiance_weight.reshape(batch_size, n_samples)
+        feature_vector = sdf_nn_output[:, 2:]
 
         gradients = sdf_network.gradient(pts).squeeze()
         normals = F.normalize(gradients, dim=-1)
@@ -277,7 +279,7 @@ class NeuSRenderer:
             disp_sdf0 = torch.matmul(gradients_sdf0, pts_sdf0_ref)  # what does this mean in Geo-NeuS?
 
             # sampling along the reflection direction
-            if cos_anneal_ratio >= 1.0:
+            if cos_anneal_ratio >= 0.0:
                 ret_ref = self.render_reflection(pts_sdf0.squeeze(), reflection_dirs_sdf0)
 
         # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
@@ -320,8 +322,11 @@ class NeuSRenderer:
         if background_rgb is not None:    # Fixed background, usually black
             color = color + background_rgb * (1.0 - weights_sum)
 
+        # radiance weight
+        radiance_weight_ray = (radiance_weight * weights[:, :n_samples]).sum(dim=-1, keepdim=True)
+
         if ret_ref is not None:  # we are in the outside function call
-            color = (color + mid_inside_sphere * ret_ref['color_fine']).clip(min=0.0, max=1.0)
+            color = ((1 - radiance_weight_ray) * color + radiance_weight_ray * ret_ref['color_fine'])
 
         # Eikonal loss
         gradient_error = (torch.linalg.norm(gradients.reshape(batch_size, n_samples, 3), ord=2,
@@ -343,6 +348,7 @@ class NeuSRenderer:
             'cdf': c.reshape(batch_size, n_samples),
             'gradient_error': gradient_error,
             'gradient_ref_error': None if ret_ref is None else ret_ref['gradient_error'],
+            'radiance_weight_ray': radiance_weight_ray,
             'inside_sphere': inside_sphere,
             'normal_map': normals_map,
             'depth_sdf': depth_sdf,
@@ -442,6 +448,7 @@ class NeuSRenderer:
             'weights': weights,
             'gradient_error': ret_fine['gradient_error'],
             'gradient_ref_error': ret_fine['gradient_ref_error'],
+            'radiance_weight_ray': ret_fine['radiance_weight_ray'],
             'inside_sphere': ret_fine['inside_sphere'],
             'normal_map': ret_fine['normal_map'],
             'depth_sdf': ret_fine['depth_sdf'],
