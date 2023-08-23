@@ -130,6 +130,7 @@ class RenderingNetwork(nn.Module):
             embedview_fn, input_ch = get_embedder(multires_view)
             self.embedview_fn = embedview_fn
             dims[0] += (input_ch - 3)
+            dims[0] += input_ch  # consider both view_dir and reflection_dir
 
         self.num_layers = len(dims)
 
@@ -144,18 +145,19 @@ class RenderingNetwork(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, points, normals, view_dirs, feature_vectors):
+    def forward(self, points, normals, view_dirs, reflection_dirs, feature_vectors):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
+            reflection_dirs = self.embedview_fn(reflection_dirs)
 
         rendering_input = None
 
         if self.mode == 'idr':
-            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, reflection_dirs, normals, feature_vectors], dim=-1)
         elif self.mode == 'no_view_dir':
             rendering_input = torch.cat([points, normals, feature_vectors], dim=-1)
         elif self.mode == 'no_normal':
-            rendering_input = torch.cat([points, view_dirs, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, reflection_dirs, feature_vectors], dim=-1)
 
         x = rendering_input
 

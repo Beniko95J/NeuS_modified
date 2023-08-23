@@ -268,7 +268,7 @@ class NeuSRenderer:
             disp_sdf0 = torch.matmul(gradients_sdf0, pts_sdf0_ref)  # what does this mean in Geo-NeuS?
 
         # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
-        sampled_color = color_network(pts, gradients, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        sampled_color = color_network(pts, gradients, dirs, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
