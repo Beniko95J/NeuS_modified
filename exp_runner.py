@@ -26,7 +26,7 @@ import imageio
 
 
 class Runner:
-    def __init__(self, conf_path, mode='train', case='CASE_NAME', appendix='', is_continue=False):
+    def __init__(self, conf_path, mode='train', case='CASE_NAME', appendix='', data_split='test', is_continue=False):
         self.device = torch.device('cuda')
 
         # Configuration
@@ -46,7 +46,7 @@ class Runner:
         else:
             d_factory = Dataset
 
-        self.dataset = d_factory(self.conf['dataset'])
+        self.dataset = d_factory(self.conf['dataset'], data_split=data_split)
         self.iter_step = 0
 
         # Training parameters
@@ -581,11 +581,12 @@ if __name__ == '__main__':
     parser.add_argument('--appendix', type=str, default='')
     parser.add_argument('--ckpt_path', type=str, default=None)
     parser.add_argument('--validate_normal', default=False, action="store_true")
+    parser.add_argument('--data_split', type=str, default='test')
 
     args = parser.parse_args()
 
     torch.cuda.set_device(args.gpu)
-    runner = Runner(args.conf, args.mode, args.case,  args.appendix, args.is_continue)
+    runner = Runner(args.conf, args.mode, args.case,  args.appendix, args.data_split, args.is_continue)
 
     if args.mode == 'train':
         runner.train()
