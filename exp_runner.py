@@ -391,6 +391,7 @@ class Runner:
         normal_img = None
         depth_sdf_img = None
         normal_sdf_img = None
+        radiance_weight_img = None
         if len(out_normal_fine) > 0:
             normal_img =  torch.from_numpy(np.concatenate(out_normal_fine, axis=0)) / 2. + 0.5
             normal_img = normal_img.permute(1, 0).reshape([3, H, W]) 
@@ -400,6 +401,9 @@ class Runner:
             depth_sdf_img = depth_sdf_img / depth_sdf_img.max()
             normal_sdf_img = torch.from_numpy(np.concatenate(out_normal_sdf, axis=0)) / 2. + 0.5
             normal_sdf_img = normal_sdf_img.permute(1, 0).reshape([3, H, W])
+        if len(out_radiance_weight) > 0:
+            radiance_weight_img = torch.from_numpy(np.concatenate(out_radiance_weight, axis=0))
+            radiance_weight_img = radiance_weight_img.reshape([H, W])
         
         vis_validation_dir = os.path.join(self.base_exp_dir, 'vis_validation')
         os.makedirs(os.path.join(vis_validation_dir, 'normals_all'), exist_ok=True)
@@ -411,6 +415,10 @@ class Runner:
             os.makedirs(os.path.join(vis_validation_dir, 'normal_sdf'), exist_ok=True)
             torchvision.utils.save_image(depth_sdf_img.clone(), os.path.join(vis_validation_dir, 'depth_sdf', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
             torchvision.utils.save_image(normal_sdf_img.clone(), os.path.join(vis_validation_dir, 'normal_sdf', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
+
+        if radiance_weight_img is not None:
+            os.makedirs(os.path.join(vis_validation_dir, 'radiance_weight'), exist_ok=True)
+            torchvision.utils.save_image(radiance_weight_img.clone(), os.path.join(vis_validation_dir, 'radiance_weight', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
 
         torchvision.utils.save_image(normal_img.clone(), os.path.join(vis_validation_dir, 'normals', '{:0>8d}_0_{}.png'.format(self.iter_step, idx)), nrow=8)
         img_fine = None
