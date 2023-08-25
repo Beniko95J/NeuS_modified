@@ -348,7 +348,7 @@ class NeuSRenderer:
             'cdf': c.reshape(batch_size, n_samples),
             'gradient_error': gradient_error,
             'gradient_ref_error': None if ret_ref is None else ret_ref['gradient_error'],
-            'radiance_weight_ray': radiance_weight_ray,
+            'radiance_weight_ray': radiance_weight_ray.detach().cpu().numpy(),
             'inside_sphere': inside_sphere,
             'normal_map': normals_map,
             'depth_sdf': depth_sdf,
