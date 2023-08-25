@@ -517,13 +517,13 @@ class Runner:
                 nonvalid_bbox = text_info['nonvalid_bbox']
             except:
                 nonvalid_bbox = None
-            # mean_d2s, mean_s2d, over_all = evaluation_shinyblender(mesh_eval, os.path.join(self.conf['dataset'].data_dir, 'dense_pcd.ply'),self.base_exp_dir, 
-            #                                                        max_dist_d=max_dist_d, max_dist_t=max_dist_t, points_for_plane=points_for_plane, nonvalid_bbox=nonvalid_bbox )
+            mean_d2s, mean_s2d, over_all = evaluation_shinyblender(mesh_eval, os.path.join(self.conf['dataset'].data_dir, 'dense_pcd.ply'),self.base_exp_dir, 
+                                                                   max_dist_d=max_dist_d, max_dist_t=max_dist_t, points_for_plane=points_for_plane, nonvalid_bbox=nonvalid_bbox )
 
-            # result.write(f'{self.iter_step}: ')
-            # result.write(f'{mean_d2s} {mean_s2d} {over_all}')
-            # result.write('\n') 
-            # result.flush()
+            result.write(f'{self.iter_step}: ')
+            result.write(f'{mean_d2s} {mean_s2d} {over_all}')
+            result.write('\n') 
+            result.flush()
             if self.iter_step == self.end_iter - 1 or ckpt_path is not None and validate_normal:
                 self.validate_all_normals()
 
