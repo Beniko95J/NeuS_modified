@@ -38,7 +38,7 @@ def load_K_Rt_from_P(filename, P=None):
 
 
 class Dataset:
-    def __init__(self, conf):
+    def __init__(self, conf, data_split='test'):
         super(Dataset, self).__init__()
         print('Load data: Begin')
         self.device = torch.device('cuda')
@@ -51,7 +51,7 @@ class Dataset:
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
         
-        with open(os.path.join(self.data_dir, 'transforms_test.json'), 'r') as fp:
+        with open(os.path.join(self.data_dir, 'transforms_{}.json'.format(data_split)), 'r') as fp:
             data_info = json.load(fp)
 
         self.images_lis = []
