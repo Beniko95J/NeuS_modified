@@ -130,7 +130,7 @@ class RenderingNetwork(nn.Module):
             embedview_fn, input_ch = get_embedder(multires_view)
             self.embedview_fn = embedview_fn
             dims[0] += (input_ch - 3)
-            dims[0] += input_ch  # consider both view_dir and reflection_dir
+            # dims[0] += input_ch  # consider both view_dir and reflection_dir
 
         self.num_layers = len(dims)
 
@@ -142,6 +142,14 @@ class RenderingNetwork(nn.Module):
                 lin = nn.utils.weight_norm(lin)
 
             setattr(self, "lin" + str(l), lin)
+        
+        weight_lin1 = nn.Linear(256, 128)
+        weight_lin2 = nn.Linear(128, 64)
+        weight_lin3 = nn.Linear(64, 1)
+        setattr(self, "weight_lin1", weight_lin1)
+        setattr(self, "weight_lin2", weight_lin2)
+        setattr(self, "weight_lin3", weight_lin3)
+        self.sigmoid = nn.Sigmoid()
 
         self.relu = nn.ReLU()
 
@@ -152,12 +160,22 @@ class RenderingNetwork(nn.Module):
 
         rendering_input = None
 
+        # view_dirs = (view_dirs + reflection_dirs) / 2
+
+        weight_lin = getattr(self, "weight_lin" + str(1))
+        alpha = self.relu(weight_lin(feature_vectors))
+        weight_lin = getattr(self, "weight_lin" + str(2))
+        alpha = self.relu(weight_lin(alpha))
+        weight_lin = getattr(self, "weight_lin" + str(3))
+        alpha = self.sigmoid(weight_lin(alpha))
+        view_dirs = alpha * view_dirs + (1 - alpha) * reflection_dirs
+
         if self.mode == 'idr':
-            rendering_input = torch.cat([points, view_dirs, reflection_dirs, normals, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
         elif self.mode == 'no_view_dir':
             rendering_input = torch.cat([points, normals, feature_vectors], dim=-1)
         elif self.mode == 'no_normal':
-            rendering_input = torch.cat([points, view_dirs, reflection_dirs, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, feature_vectors], dim=-1)
 
         x = rendering_input
 
