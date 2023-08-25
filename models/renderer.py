@@ -5,6 +5,7 @@ import numpy as np
 import logging
 import mcubes
 from icecream import ic
+from models.images import linear_to_srgb
 
 
 def extract_fields(bound_min, bound_max, resolution, query_func):
@@ -218,7 +219,7 @@ class NeuSRenderer:
         pts = pts.reshape(-1, 3)
         dirs = dirs.reshape(-1, 3)
 
-        sdf_nn_output = sdf_network(pts)
+        sdf_nn_output, diffuse_linear, tint = sdf_network(pts)
         sdf = sdf_nn_output[:, :1]
         feature_vector = sdf_nn_output[:, 1:]
 
@@ -269,6 +270,7 @@ class NeuSRenderer:
 
         # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
         sampled_color = color_network(pts, gradients, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        sampled_color = torch.clip(linear_to_srgb(sampled_color + diffuse_linear), 0.0, 1.0)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)

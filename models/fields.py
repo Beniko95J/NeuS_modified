@@ -67,7 +67,14 @@ class SDFNetwork(nn.Module):
 
             setattr(self, "lin" + str(l), lin)
 
+        lin_diffuse_color = nn.Linear(d_hidden, 3)
+        setattr(self, 'lin_diffuse_color', lin_diffuse_color)
+        lin_specular_tint = nn.Linear(d_hidden, 3)
+        setattr(self, 'lin_specular_tint', lin_specular_tint)
+        self.three = torch.tensor(3.0, dtype=torch.float32)
+
         self.activation = nn.Softplus(beta=100)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, inputs):
         inputs = inputs * self.scale
@@ -81,17 +88,28 @@ class SDFNetwork(nn.Module):
             if l in self.skip_in:
                 x = torch.cat([x, inputs], 1) / np.sqrt(2)
 
+            if l == self.num_layers - 2:
+                lin_diffuse_color = getattr(self, 'lin_diffuse_color')
+                raw_rgb_diffuse = lin_diffuse_color(x)
+                # Initialize linear diffuse color around 0.25, so that the combined
+                # linear color is initialized around 0.5.
+                diffuse_linear = self.sigmoid(raw_rgb_diffuse - torch.log(self.three))
+
+                lin_specular_tint = getattr(self, 'lin_specular_tint')
+                tint = self.sigmoid(lin_specular_tint(x))
+
             x = lin(x)
 
             if l < self.num_layers - 2:
                 x = self.activation(x)
-        return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
+
+        return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1), diffuse_linear, tint
 
     def sdf(self, x):
-        return self.forward(x)[:, :1]
+        return self.forward(x)[0][:, :1]
 
     def sdf_hidden_appearance(self, x):
-        return self.forward(x)
+        return self.forward(x)[0]
 
     def gradient(self, x):
         x.requires_grad_(True)
