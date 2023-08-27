@@ -270,7 +270,7 @@ class NeuSRenderer:
 
         # sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
         sampled_color = color_network(pts, gradients, reflection_dirs, feature_vector).reshape(batch_size, n_samples, 3)
-        sampled_color = torch.clip(linear_to_srgb(sampled_color + diffuse_linear), 0.0, 1.0)
+        sampled_color = torch.clip(linear_to_srgb(tint * sampled_color + diffuse_linear), 0.0, 1.0)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
